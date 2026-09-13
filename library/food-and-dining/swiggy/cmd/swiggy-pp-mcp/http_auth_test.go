@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -81,6 +82,23 @@ func TestRequireTLSForNonLoopback(t *testing.T) {
 	}
 	if err := requireTLSForNonLoopback("0.0.0.0:7777", false, "cert.pem", "key.pem"); err != nil {
 		t.Fatalf("non-loopback with TLS files: %v", err)
+	}
+}
+
+func TestNewMCPHTTPServerTimeouts(t *testing.T) {
+	t.Parallel()
+	srv := newMCPHTTPServer("127.0.0.1:0", http.NotFoundHandler())
+	if srv.ReadHeaderTimeout != 10*time.Second {
+		t.Fatalf("ReadHeaderTimeout = %s", srv.ReadHeaderTimeout)
+	}
+	if srv.ReadTimeout != 30*time.Second {
+		t.Fatalf("ReadTimeout = %s", srv.ReadTimeout)
+	}
+	if srv.IdleTimeout != 120*time.Second {
+		t.Fatalf("IdleTimeout = %s", srv.IdleTimeout)
+	}
+	if srv.WriteTimeout != 0 {
+		t.Fatalf("WriteTimeout = %s, want 0 for streaming", srv.WriteTimeout)
 	}
 }
 

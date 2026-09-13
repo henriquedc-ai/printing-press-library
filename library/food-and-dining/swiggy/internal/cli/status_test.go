@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mvanhorn/printing-press-library/library/food-and-dining/swiggy/internal/cliutil/testenv"
 )
@@ -31,5 +32,32 @@ func TestNovelStatusHelpWires(t *testing.T) {
 		if !strings.Contains(help, want) {
 			t.Fatalf("status --help missing %q in output:\n%s", want, help)
 		}
+	}
+}
+
+func TestLocalTokenStatusUnknownExpiry(t *testing.T) {
+	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+
+	missing := localTokenStatus("", time.Time{}, now)
+	if missing.Authenticated || !missing.ReauthRecommended || missing.CredentialsPresent {
+		t.Fatalf("missing token = %+v", missing)
+	}
+
+	unknown := localTokenStatus("tok", time.Time{}, now)
+	if unknown.Authenticated || !unknown.CredentialsPresent || unknown.ExpiryKnown || !unknown.ReauthRecommended {
+		t.Fatalf("unknown expiry treated as authenticated: %+v", unknown)
+	}
+	if unknown.ExpiresIn != "unknown" {
+		t.Fatalf("expires_in = %q, want unknown", unknown.ExpiresIn)
+	}
+
+	expired := localTokenStatus("tok", now.Add(-time.Hour), now)
+	if expired.Authenticated || !expired.Expired || !expired.ReauthRecommended {
+		t.Fatalf("expired token = %+v", expired)
+	}
+
+	ok := localTokenStatus("tok", now.Add(2*time.Hour), now)
+	if !ok.Authenticated || ok.ReauthRecommended || ok.ExpiresIn == "" || ok.ExpiryUTC == "" {
+		t.Fatalf("valid token = %+v", ok)
 	}
 }

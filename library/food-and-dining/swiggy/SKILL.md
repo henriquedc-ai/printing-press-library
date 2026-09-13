@@ -37,7 +37,7 @@ go install github.com/mvanhorn/printing-press-library/library/food-and-dining/sw
 
 If `--version` reports "command not found" after install, the runtime cannot see the binary directory on `$PATH`. Do not proceed with skill commands until verification succeeds.
 
-Wraps all 51 official Swiggy MCP tools across Food, Instamart, and Dineout into one CLI that respects Swiggy's own session-reuse rules instead of tripping rate limits. Adds cross-domain spend history, a safe-retry guard for non-idempotent order placement,.
+Wraps all 51 official Swiggy MCP tools across Food, Instamart, and Dineout into one CLI that respects Swiggy's own session-reuse rules instead of tripping rate limits. Adds cross-domain spend history, a safe-retry guard for non-idempotent order placement, and a UPI payment-wait command on top.
 
 ## When to Use This CLI
 
@@ -55,7 +55,7 @@ Do not use this CLI for:
 These capabilities aren't available in any other tool for this API.
 
 ### Local state that compounds
-- **`history`** — See total spend and order counts across Food and Instamart in one view, even though Swiggy keeps them completely separate. Dineout has no orders-list tool and is not included.
+- **`history`** — See spend and order counts across Food and Instamart in one view, even though Swiggy keeps them completely separate. Instamart totals are a sample of at most 20 orders (`get_orders` has no pagination) and are labeled `partial` when that cap is hit. `--since` is reserved and unused. Dineout has no orders-list tool and is not included.
 
   _Reach for this when the user asks about overall Swiggy spend or activity rather than a single domain's orders._
 
@@ -71,21 +71,21 @@ These capabilities aren't available in any other tool for this API.
   ```bash
   swiggy-pp-cli pay wait --paas-id paas_123 --order-id ord_01HXYZ --domain food --max-wait 5s
   ```
-- **`status`** — See at a glance whether your Swiggy login is still valid and which domain sessions are active.
+- **`status`** — Check local credential presence and stored token expiry. A token with no stored expiry (typical for `SWIGGY_ACCESS_TOKEN`) is reported as unknown, not fully authenticated, and re-auth is recommended. This is not a live Swiggy validation.
 
-  _Check this before starting a multi-step order flow to avoid a mid-flow 401._
+  _Check this before starting a multi-step order flow; treat unknown expiry or a later 401 as a signal to re-run auth login._
 
   ```bash
   swiggy-pp-cli status
   ```
 
 ### Reachability mitigation
-- **`order verify-before-retry`** — Check whether a food or grocery order actually went through before retrying a failed placement.
+- **`order verify-before-retry`** — Check whether a food or grocery order actually went through before retrying a failed placement. Matches amount/restaurant only inside `--within` (default 30m). Orders without timestamps fail closed instead of being treated as already placed or safe to retry.
 
   _Use this before ever re-issuing place-food-order or checkout after a 5xx or timeout._
 
   ```bash
-  swiggy-pp-cli order verify-before-retry --domain food --address-id addr_01HXYZ --amount 450
+  swiggy-pp-cli order verify-before-retry --domain food --address-id addr_01HXYZ --amount 450 --within 30m
   ```
 
 ## Command Reference

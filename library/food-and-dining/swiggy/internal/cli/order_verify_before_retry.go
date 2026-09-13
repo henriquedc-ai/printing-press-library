@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -20,6 +21,7 @@ func newNovelOrderVerifyBeforeRetryCmd(flags *rootFlags) *cobra.Command {
 	var flagRestaurantId string
 	var flagAmount string
 	var flagRecent int
+	var flagWithin time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "verify-before-retry",
@@ -75,60 +77,60 @@ func newNovelOrderVerifyBeforeRetryCmd(flags *rootFlags) *cobra.Command {
 				return fmt.Errorf("invalid --domain %q; must be one of food, instamart", flagDomain)
 			}
 
-			if flagRecent <= 0 {
-				flagRecent = 10
+			if flagWithin <= 0 {
+				flagWithin = 30 * time.Minute
 			}
-			if len(orders) > flagRecent {
-				orders = orders[:flagRecent]
-			}
-
-			var match map[string]any
-			for _, o := range orders {
-				if !amountMatches(o, flagAmount) {
-					continue
-				}
-				if flagRestaurantId != "" {
-					rid, _ := o["restaurantId"].(string)
-					if rid != flagRestaurantId {
-						continue
-					}
-				}
-				match = o
-				break
-			}
+			result := evaluateRetryMatch(orders, flagAmount, flagRestaurantId, time.Now(), flagWithin)
 
 			w := cmd.OutOrStdout()
 			if flags.asJSON {
 				out := map[string]any{
-					"placed":         match != nil,
-					"matched_order":  match,
-					"checked_orders": len(orders),
+					"placed":         result.Verdict == retryAlreadyPlaced,
+					"safe_to_retry":  result.Verdict == retrySafe,
+					"ambiguous":      result.Verdict == retryAmbiguous,
+					"matched_order":  result.Match,
+					"checked_orders": result.Checked,
+					"window":         flagWithin.String(),
+					"reason":         result.Reason,
+					"recent":         flagRecent,
+					"recent_applied": false,
 				}
-				return printJSONFiltered(w, out, flags)
-			}
-			if match != nil {
-				fmt.Fprintln(w, green("Already placed — do NOT retry."))
-				if id, ok := match["orderId"].(string); ok {
-					fmt.Fprintf(w, "  Matching order id: %s\n", id)
+				if err := printJSONFiltered(w, out, flags); err != nil {
+					return err
+				}
+				if result.Verdict == retryAmbiguous {
+					return fmt.Errorf("%s", result.Reason)
 				}
 				return nil
 			}
-			fmt.Fprintln(w, "No matching recent order found — safe to retry the placement call.")
-			fmt.Fprintf(w, "  (checked the %d most recent orders for amount ~= %s%s)\n", len(orders), flagAmount,
-				func() string {
-					if flagRestaurantId != "" {
-						return " and restaurant " + flagRestaurantId
-					}
-					return ""
-				}())
-			return nil
+			switch result.Verdict {
+			case retryAlreadyPlaced:
+				fmt.Fprintln(w, green("Already placed — do NOT retry."))
+				if id, ok := result.Match["orderId"].(string); ok {
+					fmt.Fprintf(w, "  Matching order id: %s\n", id)
+				}
+				return nil
+			case retryAmbiguous:
+				return fmt.Errorf("%s", result.Reason)
+			default:
+				fmt.Fprintln(w, "No matching order in the recent time window — safe to retry the placement call.")
+				fmt.Fprintf(w, "  (checked %d orders within %s for amount ~= %s%s)\n", result.Checked, flagWithin, flagAmount,
+					func() string {
+						if flagRestaurantId != "" {
+							return " and restaurant " + flagRestaurantId
+						}
+						return ""
+					}())
+				return nil
+			}
 		},
 	}
 	cmd.Flags().StringVar(&flagDomain, "domain", "", "One of food, instamart")
 	cmd.Flags().StringVar(&flagAddressId, "address-id", "", "Required for --domain food")
 	cmd.Flags().StringVar(&flagRestaurantId, "restaurant-id", "", "Optional: narrow the match to this restaurant (food only)")
 	cmd.Flags().StringVar(&flagAmount, "amount", "", "The order total you expected to be charged, e.g. 450")
-	cmd.Flags().IntVar(&flagRecent, "recent", 10, "How many of the most recent orders to check")
+	cmd.Flags().IntVar(&flagRecent, "recent", 10, "Deprecated: matching uses --within, not a raw prefix of the response")
+	cmd.Flags().DurationVar(&flagWithin, "within", 30*time.Minute, "Only treat amount/restaurant matches inside this window as the attempted order")
 	return cmd
 }
 

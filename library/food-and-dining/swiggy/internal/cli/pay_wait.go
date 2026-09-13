@@ -66,14 +66,11 @@ func newNovelPayWaitCmd(flags *rootFlags) *cobra.Command {
 					return classifyAPIError(cmd.OutOrStdout(), err, flags)
 				}
 				last = data
-				var parsed struct {
-					Success bool `json:"success"`
-					Data    struct {
-						Terminal bool   `json:"terminal"`
-						Status   string `json:"status"`
-					} `json:"data"`
+				terminal, _, err := parsePaymentTerminal(data)
+				if err != nil {
+					return err
 				}
-				if json.Unmarshal(data, &parsed) == nil && parsed.Data.Terminal {
+				if terminal {
 					break
 				}
 				if time.Now().After(deadline) {
@@ -98,4 +95,20 @@ func newNovelPayWaitCmd(flags *rootFlags) *cobra.Command {
 	cmd.Flags().StringVar(&flagDomain, "domain", "", "One of food, instamart, dineout")
 	cmd.Flags().DurationVar(&flagMaxWait, "max-wait", 2*time.Minute, "Give up after this long if payment never reaches a terminal state")
 	return cmd
+}
+
+func parsePaymentTerminal(data []byte) (bool, string, error) {
+	var parsed struct {
+		Data *struct {
+			Terminal *bool  `json:"terminal"`
+			Status   string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return false, "", fmt.Errorf("pay wait: payment status response was not valid JSON: %w", err)
+	}
+	if parsed.Data == nil || parsed.Data.Terminal == nil {
+		return false, "", fmt.Errorf("pay wait: payment status response missing data.terminal")
+	}
+	return *parsed.Data.Terminal, parsed.Data.Status, nil
 }

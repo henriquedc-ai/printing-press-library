@@ -153,7 +153,7 @@ swiggy-pp-cli history --address-id addr_01HXYZ --agent
 These capabilities aren't available in any other tool for this API.
 
 ### Local state that compounds
-- **`history`** — See total spend and order counts across Food and Instamart in one view, even though Swiggy keeps them completely separate. Dineout has no orders-list tool and is not included.
+- **`history`** — See spend and order counts across Food and Instamart in one view, even though Swiggy keeps them completely separate. Instamart totals are a sample of at most 20 orders and are labeled partial when that cap is hit. `--since` is reserved and unused. Dineout has no orders-list tool and is not included.
 
   _Reach for this when the user asks about overall Swiggy spend or activity rather than a single domain's orders._
 
@@ -169,7 +169,7 @@ These capabilities aren't available in any other tool for this API.
   ```bash
   swiggy-pp-cli pay wait --paas-id paas_123 --order-id ord_01HXYZ --domain food --max-wait 5s
   ```
-- **`status`** — See at a glance whether your Swiggy login is still valid and which domain sessions are active.
+- **`status`** — Check local credential presence and stored token expiry. A token with no stored expiry is reported as unknown, not fully authenticated. This is not a live Swiggy validation.
 
   _Check this before starting a multi-step order flow to avoid a mid-flow 401._
 
@@ -178,7 +178,7 @@ These capabilities aren't available in any other tool for this API.
   ```
 
 ### Reachability mitigation
-- **`order verify-before-retry`** — Check whether a food or grocery order actually went through before retrying a failed placement.
+- **`order verify-before-retry`** — Check whether a food or grocery order actually went through before retrying a failed placement. Amount/restaurant matches must fall inside `--within` (default 30m); orders without timestamps fail closed.
 
   _Use this before ever re-issuing place-food-order or checkout after a 5xx or timeout._
 

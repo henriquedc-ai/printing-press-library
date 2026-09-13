@@ -7,6 +7,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -20,7 +21,9 @@ func newNovelHistoryCmd(flags *rootFlags) *cobra.Command {
 		Short: "See total spend and order counts across Food, Instamart, and Dineout in one view",
 		Long: "Use this for a combined view across Food and Instamart.\n" +
 			"Do NOT use this for single-domain order lookup; use 'food get-food-orders' or 'instamart get-orders' for that.\n" +
-			"Dineout has no orders-list tool (only get-booking-status by id), so it is not included here.",
+			"Dineout has no orders-list tool (only get-booking-status by id), so it is not included here.\n" +
+			"Instamart get_orders has no pagination and is capped at 20 rows; those totals are labeled as a sample.\n" +
+			"--since is reserved and is not applied (this CLI has no local order cache).",
 		Example:     "  swiggy-pp-cli history --address-id addr_01HXYZ --agent",
 		Annotations: map[string]string{"mcp:read-only": "true", "pp:data-source": "live", "pp:novel-scaffold": "true", "pp:happy-args": "--address-id=d6tcokq9681fvjepnc60__AbLNWwSYaOosJZH1CJh5-h"},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -62,23 +65,71 @@ func newNovelHistoryCmd(flags *rootFlags) *cobra.Command {
 				return fmt.Errorf("parsing instamart order history: %w", err)
 			}
 			imSpend := sumAmounts(imOrders, "totalAmount")
-			byDomain["instamart"] = map[string]any{"order_count": len(imOrders), "spend": imSpend}
+			imCoverage := instamartHistoryCoverage(len(imOrders), instamartHistoryLimit)
+			byDomain["instamart"] = imCoverage.asDomain(imSpend)
 			totalSpend += imSpend
 			totalOrders += len(imOrders)
 
 			byDomain["dineout"] = map[string]any{"skipped": "no bookings-list tool exists on the Dineout MCP server"}
 
-			out := map[string]any{
-				"total_spend": totalSpend,
-				"order_count": totalOrders,
-				"by_domain":   byDomain,
+			if flagSince != "" {
+				fmt.Fprintf(os.Stderr, "warning: --since %q is reserved and was not applied; this CLI has no local order cache\n", flagSince)
 			}
+			out := buildHistoryResult(totalSpend, totalOrders, byDomain, imCoverage, flagSince)
 			return printJSONFiltered(cmd.OutOrStdout(), out, flags)
 		},
 	}
 	cmd.Flags().StringVar(&flagAddressId, "address-id", "", "Address id to fetch Food order history for (required to include Food; get_food_orders needs it)")
-	cmd.Flags().StringVar(&flagSince, "since", "", "Reserved: no local cache is enabled for this CLI (cache.enabled: false), so this filters nothing today")
+	cmd.Flags().StringVar(&flagSince, "since", "", "Reserved and unused: no local cache exists, so this never filters results")
 	return cmd
+}
+
+const instamartHistoryLimit = 20
+
+type historyCoverage struct {
+	OrderCount int
+	Partial    bool
+	Coverage   string
+	Note       string
+	Limit      int
+}
+
+func instamartHistoryCoverage(got, requested int) historyCoverage {
+	partial := requested > 0 && got >= requested
+	coverage := "sample"
+	note := fmt.Sprintf("Instamart get_orders has no pagination; totals cover at most the last %d orders", requested)
+	if partial {
+		coverage = "partial_sample"
+		note = fmt.Sprintf("Instamart returned the %d-order cap; more orders may exist and these totals are incomplete", requested)
+	}
+	return historyCoverage{OrderCount: got, Partial: partial, Coverage: coverage, Note: note, Limit: requested}
+}
+
+func (c historyCoverage) asDomain(spend float64) map[string]any {
+	return map[string]any{
+		"order_count": c.OrderCount,
+		"spend":       spend,
+		"partial":     c.Partial,
+		"coverage":    c.Coverage,
+		"note":        c.Note,
+		"limit":       c.Limit,
+	}
+}
+
+func buildHistoryResult(totalSpend float64, totalOrders int, byDomain map[string]any, im historyCoverage, since string) map[string]any {
+	out := map[string]any{
+		"total_spend": totalSpend,
+		"order_count": totalOrders,
+		"by_domain":   byDomain,
+		"partial":     im.Partial,
+		"coverage":    im.Coverage,
+	}
+	if since != "" {
+		out["since"] = since
+		out["since_applied"] = false
+		out["since_note"] = "reserved; no local cache, filter is not applied"
+	}
+	return out
 }
 
 func sumAmounts(orders []map[string]any, key string) float64 {

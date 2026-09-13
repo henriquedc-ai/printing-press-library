@@ -17,7 +17,9 @@ func newNovelStatusCmd(flags *rootFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "See at a glance whether your Swiggy login is still valid and which domain sessions are active.",
-		Long: "Use this to check whether you need to re-run 'auth login' before starting a session.\n" +
+		Long: "Use this to check local credential presence and stored token expiry.\n" +
+			"This is not a live Swiggy validation; a revoked token can still look present.\n" +
+			"A token without stored expiry (typical for SWIGGY_ACCESS_TOKEN) is treated as unknown and re-auth is recommended.\n" +
 			"Do NOT use this to perform login itself; it is read-only. Run 'auth login' to authenticate.",
 		Example:     "  swiggy-pp-cli status",
 		Annotations: map[string]string{"mcp:read-only": "true", "pp:data-source": "computed", "pp:novel-scaffold": "true"},
@@ -30,48 +32,87 @@ func newNovelStatusCmd(flags *rootFlags) *cobra.Command {
 				return configErr(err)
 			}
 
-			authenticated := cfg.AccessToken != ""
-			var expiresIn string
-			var expired bool
-			if authenticated && !cfg.TokenExpiry.IsZero() {
-				remaining := time.Until(cfg.TokenExpiry)
-				expired = remaining <= 0
-				if expired {
-					expiresIn = "expired"
-				} else {
-					expiresIn = remaining.Round(time.Minute).String()
-				}
-			}
+			report := localTokenStatus(cfg.AccessToken, cfg.TokenExpiry, time.Now())
 
 			w := cmd.OutOrStdout()
 			if flags.asJSON {
 				out := map[string]any{
-					"authenticated":      authenticated,
-					"token_expired":      expired,
-					"token_expires_in":   expiresIn,
-					"token_expiry_utc":   cfg.TokenExpiry.UTC().Format(time.RFC3339),
-					"config_path":        cfg.Path,
-					"reauth_recommended": !authenticated || expired,
+					"authenticated":       report.Authenticated,
+					"credentials_present": report.CredentialsPresent,
+					"token_expiry_known":  report.ExpiryKnown,
+					"token_expired":       report.Expired,
+					"token_expires_in":    report.ExpiresIn,
+					"token_expiry_utc":    report.ExpiryUTC,
+					"config_path":         cfg.Path,
+					"reauth_recommended":  report.ReauthRecommended,
+					"live_check":          false,
 				}
 				return printJSONFiltered(w, out, flags)
 			}
 
-			if !authenticated {
+			if !report.CredentialsPresent {
 				fmt.Fprintln(w, red("Not authenticated"))
 				fmt.Fprintln(w, "  Run 'swiggy-pp-cli auth login' to complete the OAuth 2.1 browser login (phone + OTP).")
-				return authErr(fmt.Errorf("no Swiggy access token stored"))
+				return authErr(fmt.Errorf("%s", report.Error))
 			}
-			if expired {
+			if report.Expired {
 				fmt.Fprintln(w, red("Access token expired"))
 				fmt.Fprintln(w, "  Swiggy access tokens last 5 days with no refresh-token issuance in v1.0.")
 				fmt.Fprintln(w, "  Run 'swiggy-pp-cli auth login' to re-authenticate.")
-				return authErr(fmt.Errorf("access token expired at %s", cfg.TokenExpiry.UTC().Format(time.RFC3339)))
+				return authErr(fmt.Errorf("%s", report.Error))
+			}
+			if !report.ExpiryKnown {
+				fmt.Fprintln(w, red("Credentials present, expiry unknown"))
+				fmt.Fprintln(w, "  This token has no stored expiry (typical for SWIGGY_ACCESS_TOKEN).")
+				fmt.Fprintln(w, "  Run 'swiggy-pp-cli auth login' to refresh, or treat a mid-flow 401 as re-auth.")
+				return authErr(fmt.Errorf("%s", report.Error))
 			}
 			fmt.Fprintln(w, green("Authenticated"))
-			fmt.Fprintf(w, "  Token expires in: %s (%s)\n", expiresIn, cfg.TokenExpiry.UTC().Format(time.RFC3339))
+			fmt.Fprintf(w, "  Token expires in: %s (%s)\n", report.ExpiresIn, report.ExpiryUTC)
+			fmt.Fprintln(w, "  Local expiry only — this command does not call Swiggy to prove the token is still valid.")
 			fmt.Fprintln(w, "  Domains share this one session token: food, instamart, dineout each POST to their own endpoint under it.")
 			return nil
 		},
 	}
 	return cmd
+}
+
+type tokenStatusReport struct {
+	Authenticated      bool
+	CredentialsPresent bool
+	ExpiryKnown        bool
+	Expired            bool
+	ExpiresIn          string
+	ExpiryUTC          string
+	ReauthRecommended  bool
+	Error              string
+}
+
+func localTokenStatus(token string, expiry, now time.Time) tokenStatusReport {
+	report := tokenStatusReport{
+		CredentialsPresent: token != "",
+		ExpiryKnown:        !expiry.IsZero(),
+	}
+	if !report.CredentialsPresent {
+		report.ReauthRecommended = true
+		report.Error = "no Swiggy access token stored"
+		return report
+	}
+	if !report.ExpiryKnown {
+		report.ExpiresIn = "unknown"
+		report.ReauthRecommended = true
+		report.Error = "access token present but expiry is unknown; re-auth recommended"
+		return report
+	}
+	report.ExpiryUTC = expiry.UTC().Format(time.RFC3339)
+	if !expiry.After(now) {
+		report.Expired = true
+		report.ExpiresIn = "expired"
+		report.ReauthRecommended = true
+		report.Error = fmt.Sprintf("access token expired at %s", report.ExpiryUTC)
+		return report
+	}
+	report.Authenticated = true
+	report.ExpiresIn = expiry.Sub(now).Round(time.Minute).String()
+	return report
 }

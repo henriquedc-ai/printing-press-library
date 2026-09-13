@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/mvanhorn/printing-press-library/library/food-and-dining/swiggy/internal/cli"
@@ -80,10 +81,7 @@ func main() {
 			os.Exit(1)
 		}
 		inner := server.NewStreamableHTTPServer(s)
-		httpSrv := &http.Server{
-			Addr:    bindAddr,
-			Handler: requireBearerAuth(token, inner),
-		}
+		httpSrv := newMCPHTTPServer(bindAddr, requireBearerAuth(token, inner))
 		fmt.Fprintf(os.Stderr, "swiggy-pp-mcp serving MCP over streamable HTTP at %s (Authorization: Bearer $%s)\n", bindAddr, httpTokenEnvVar)
 		if *tlsCert != "" {
 			err = httpSrv.ListenAndServeTLS(*tlsCert, *tlsKey)
@@ -109,6 +107,17 @@ func defaultTransport() string {
 		return t
 	}
 	return "stdio"
+}
+
+func newMCPHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// WriteTimeout stays zero: streamable-HTTP responses are long-lived.
+	}
 }
 
 func requireHTTPCallerToken() (string, error) {

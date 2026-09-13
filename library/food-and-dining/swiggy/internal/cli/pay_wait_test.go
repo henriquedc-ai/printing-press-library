@@ -33,3 +33,25 @@ func TestNovelPayWaitHelpWires(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePaymentTerminal(t *testing.T) {
+	terminal, status, err := parsePaymentTerminal([]byte(`{"data":{"terminal":true,"status":"SUCCESS"}}`))
+	if err != nil || !terminal || status != "SUCCESS" {
+		t.Fatalf("terminal true: %v %v %q", terminal, err, status)
+	}
+
+	pending, _, err := parsePaymentTerminal([]byte(`{"data":{"terminal":false,"status":"PENDING"}}`))
+	if err != nil || pending {
+		t.Fatalf("pending: %v %v", pending, err)
+	}
+
+	if _, _, err := parsePaymentTerminal([]byte(`not-json`)); err == nil {
+		t.Fatal("malformed JSON must error, not look like a timeout")
+	}
+	if _, _, err := parsePaymentTerminal([]byte(`{"success":true}`)); err == nil {
+		t.Fatal("missing data.terminal must error")
+	}
+	if _, _, err := parsePaymentTerminal([]byte(`{"data":{"status":"PENDING"}}`)); err == nil {
+		t.Fatal("data without terminal must error")
+	}
+}
